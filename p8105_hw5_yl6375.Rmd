@@ -1,0 +1,53 @@
+---
+title: "p8105_hw5_yl6375.Rmd"
+author: "Yikai Lu"
+date: "`r Sys.Date()`"
+output: github_document
+---
+#Problem 1
+```{r birthday-function}
+library(tidyverse)
+
+has_shared_birthday <- function(n) {
+  birthdays <- sample.int(365, size = n, replace = TRUE)
+  any(duplicated(birthdays))
+}
+```
+
+```{r birthday-simulation}
+#Estimate the probability for each group size
+set.seed(8105)
+
+birthday_results <- tibble(group_size = 2:50) |>
+  mutate(
+    probability = map_dbl(
+      group_size,
+      function(n) mean(replicate(10000, has_shared_birthday(n)))
+    )
+  )
+```
+
+```{r birthday-plot, fig.width=7, fig.height=4.5}
+ggplot(birthday_results, aes(x = group_size, y = probability)) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "grey60") +
+  geom_line(color = "steelblue", linewidth = 1) +
+  scale_y_continuous(
+    labels = scales::label_percent(accuracy = 1),
+    limits = c(0, 1)
+  ) +
+  labs(
+    title = "Larger groups are more likely to share a birthday",
+    x = "Number of people in the room",
+    y = "Estimated probability of a shared birthday"
+  ) +
+  theme_minimal(base_size = 13)
+```
+#The estimated probability of a shared birthday increased with group size. The first group size for which at least half of the simulated rooms had a match was `r min(birthday_results$group_size[birthday_results$probability >= 0.5])`. By the largest group size of `r max(birthday_results$group_size)` people, `r scales::percent(birthday_results$probability[which.max(birthday_results$group_size)], accuracy = 0.1)` of rooms had at least one match. A shared birthday becomes more likely as the group grows because each new person can match anyone already in the room. In the largest group alone, there were `r choose(max(birthday_results$group_size), 2)` possible pairs.
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
