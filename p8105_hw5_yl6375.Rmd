@@ -44,7 +44,170 @@ ggplot(birthday_results, aes(x = group_size, y = probability)) +
 ```
 #The estimated probability of a shared birthday increased with group size. The first group size for which at least half of the simulated rooms had a match was `r min(birthday_results$group_size[birthday_results$probability >= 0.5])`. By the largest group size of `r max(birthday_results$group_size)` people, `r scales::percent(birthday_results$probability[which.max(birthday_results$group_size)], accuracy = 0.1)` of rooms had at least one match. A shared birthday becomes more likely as the group grows because each new person can match anyone already in the room. In the largest group alone, there were `r choose(max(birthday_results$group_size), 2)` possible pairs.
 
+#problem 2
+```{r longitudinal-import}
+library(tidyverse)
+participant_files <- tibble(
+  path = list.files(
+    "data/longitudinal",
+    pattern = "\\.csv$",
+    full.names = TRUE
+  )
+)
 
+stopifnot(nrow(participant_files) > 0)
+
+participant_files <- participant_files |>
+  mutate(
+    file_name = basename(path),
+    measurements = purrr::map(path, read_csv, show_col_types = FALSE)
+  )
+
+participant_files |>
+  select(file_name, measurements) |>
+  head()
+```
+
+```{r longitudinal-tidy}
+study_data <- participant_files |>
+  mutate(participant = tools::file_path_sans_ext(file_name)) |>
+  separate_wider_delim(
+    participant,
+    delim = "_",
+    names = c("arm", "subject_id")
+  ) |>
+  mutate(arm = recode(arm, con = "Control", exp = "Experimental")) |>
+  unnest(measurements) |>
+  pivot_longer(
+    cols = starts_with("week_"),
+    names_to = "week",
+    names_prefix = "week_",
+    names_transform = list(week = as.integer),
+    values_to = "observation"
+  ) |>
+  select(arm, subject_id, week, observation) |>
+  arrange(arm, subject_id, week)
+
+head(study_data, 8)
+```
+
+```{r longitudinal-plot, fig.width=8, fig.height=4.5}
+ggplot(
+  study_data,
+  aes(
+    x = week,
+    y = observation,
+    group = interaction(arm, subject_id),
+    color = arm
+  )
+) +
+  geom_line(linewidth = 0.7, alpha = 0.75) +
+  geom_point(size = 1.2) +
+  facet_wrap(~ arm, nrow = 1) +
+  scale_x_continuous(breaks = 1:8) +
+  labs(
+    title = "Weekly observations by study arm",
+    subtitle = "Each line follows one participant",
+    x = "Study week",
+    y = "Observation"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "none")
+```
+```{r longitudinal-change, include=FALSE}
+arm_change <- study_data |>
+  arrange(arm, subject_id, week) |>
+  group_by(arm, subject_id) |>
+  summarise(change = last(observation) - first(observation), .groups = "drop") |>
+  group_by(arm) |>
+  summarise(mean_change = mean(change), .groups = "drop")
+```
+#The two arms had overlapping observations at the first week. Over time, observations generally increased in the experimental arm, while control participants fluctuated without a clear overall trend. The average within-participant change from the first to the last week was `r sprintf("%+.2f", arm_change$mean_change[arm_change$arm == "Experimental"])` units in the experimental arm and `r sprintf("%+.2f", arm_change$mean_change[arm_change$arm == "Control"])` units in the control arm. By the final week, every experimental participant had a higher observation than every control participant.
+
+
+#Problem 3
+```{r simulate-one-test}
+simulate_t_test <- function(true_mu) {
+  x <- rnorm(n = 30, mean = true_mu, sd = 5)
+  test <- t.test(x, mu = 0, alternative = "two.sided")
+
+  tibble(
+    estimate = unname(test$estimate),
+    p_value = test$p.value
+  )
+}
+
+set.seed(8105)
+
+n_sim <- 5000
+alpha <- 0.05
+
+sim_results <- expand_grid(
+  true_mu = 0:6,
+  simulation = seq_len(n_sim)
+) |>
+  mutate(result = map(true_mu, simulate_t_test)) |>
+  unnest(result) |>
+  mutate(rejected = p_value < alpha)
+
+power_summary <- sim_results |>
+  group_by(true_mu) |>
+  summarise(
+    n_tests = n(),
+    rejection_rate = mean(rejected),
+    mean_all = mean(estimate),
+    mean_rejected = mean(estimate[rejected]),
+    .groups = "drop"
+  )
+
+power_summary
+```
+```{r power-plot, fig.width=7, fig.height=4}
+ggplot(power_summary, aes(x = true_mu, y = rejection_rate)) +
+  geom_hline(yintercept = alpha, linetype = "dashed", color = "grey55") +
+  geom_line(linewidth = 0.9, color = "steelblue") +
+  geom_point(size = 2.5, color = "steelblue") +
+  scale_x_continuous(breaks = 0:6) +
+  scale_y_continuous(labels = scales::label_percent(), limits = c(0, 1)) +
+  labs(
+    title = "Power increases as the true mean moves away from zero",
+    x = "True population mean",
+    y = "Percentage of tests rejecting the null"
+  ) +
+  theme_minimal(base_size = 13)
+```
+When the true mean was zero, the test rejected the null in `r scales::percent(power_summary$rejection_rate[power_summary$true_mu == 0], accuracy = 0.01)` of simulations, close to the nominal significance level of `r scales::percent(alpha)`. As the true mean increased from 1 to 3, estimated power rose from `r scales::percent(power_summary$rejection_rate[power_summary$true_mu == 1], accuracy = 0.1)` to `r scales::percent(power_summary$rejection_rate[power_summary$true_mu == 3], accuracy = 0.1)`. With sample size and variability held fixed, larger differences from zero were easier to detect.
+
+
+```{r estimate-plot, fig.width=7, fig.height=4.5}
+power_summary |>
+  select(true_mu, mean_all, mean_rejected) |>
+  pivot_longer(
+    cols = c(mean_all, mean_rejected),
+    names_to = "samples",
+    values_to = "average_estimate"
+  ) |>
+  ggplot(aes(x = true_mu, y = average_estimate, color = samples)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey55") +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2.5) +
+  scale_color_manual(
+    values = c(mean_all = "steelblue", mean_rejected = "darkorange3"),
+    labels = c(mean_all = "All samples", mean_rejected = "Rejected tests only")
+  ) +
+  scale_x_continuous(breaks = 0:6) +
+  labs(
+    title = "Average estimated mean by true population mean",
+    subtitle = "The dashed line marks agreement with the true mean",
+    x = "True population mean",
+    y = "Average estimated mean",
+    color = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+```
+
+Across all samples, the average estimated mean closely followed the true mean. When the true mean was 1, the average estimate was `r round(power_summary$mean_all[power_summary$true_mu == 1], 2)` across all samples and `r round(power_summary$mean_rejected[power_summary$true_mu == 1], 2)` among rejected tests. For a small positive effect, samples whose means fluctuate upward are more likely to reach significance, so selecting only significant results tends to overestimate the effect. As the true mean increased, nearly all tests rejected the null and the two averages converged. At a true mean of zero, the two-sided test can reject in either direction, so the positive average among rejected tests in this simulation reflects random variation.
 
 
 ```{r setup, include=FALSE}
